@@ -29,10 +29,10 @@ Converts Minecraft world blocks or schematics into <code>.bloxdschem</code> for 
 <script src="vendor/nbt.js"></script> <!-- NBT parser -->
 
 <script>
-const drop=document.getElementById("drop");
-const fileInput=document.getElementById("file");
-const status=document.getElementById("status");
-const actions=document.getElementById("actions");
+const drop = document.getElementById("drop");
+const fileInput = document.getElementById("file");
+const status = document.getElementById("status");
+const actions = document.getElementById("actions");
 
 function setStatus(t){status.textContent=t;}
 function clearActions(){actions.innerHTML="";}
@@ -43,9 +43,9 @@ drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("drag
 drop.addEventListener("dragleave",()=>drop.classList.remove("dragover"));
 drop.addEventListener("drop",e=>{
   e.preventDefault(); drop.classList.remove("dragover");
-  const f=e.dataTransfer.files[0];
+  const f = e.dataTransfer.files[0];
   if(!f) return;
-  fileInput.files=e.dataTransfer.files;
+  fileInput.files = e.dataTransfer.files;
   fileInput.dispatchEvent(new Event("change"));
 });
 
@@ -66,6 +66,7 @@ fileInput.addEventListener("change", async(ev)=>{
   }
 });
 
+// Convert schematic files
 async function convertWithM2B(blob){
   try{
     setStatus("Converting → .bloxdschem ...");
@@ -87,7 +88,7 @@ async function handleMcworld(f){
     if(isJava){
       convertJavaMcworld(zip);
     } else if(isBedrock){
-      setStatus("Bedrock .mcworld detected. Full-world conversion not supported in-browser. Please export builds as .schem to convert.");
+      await handleBedrockMcworld(zip);
     } else {
       setStatus("No recognizable world data found.");
     }
@@ -111,10 +112,10 @@ async function convertJavaMcworld(zip){
     let tempSchematic = {width:0,height:0,length:0,blocks:[],palette:{}};
 
     for(const rFile of regionFiles){
-      const data = await zip.files[rFile].async("arraybuffer");
+      const data = await zip.files[rFile].async("arrayBuffer");
 
-      // Implement parseMCAtoChunks using nbt.js
-      const chunks = parseMCAtoChunks(data); // TODO: parse MCA → return array of {chunkX, chunkZ, blocks:[{x,y,z,id}]}  
+      // TODO: implement parseMCAtoChunks using nbt.js
+      const chunks = parseMCAtoChunks(data); // return array of {chunkX, chunkZ, blocks:[{x,y,z,id}]}
 
       for(const chunk of chunks){
         for(const block of chunk.blocks){
@@ -141,6 +142,33 @@ async function convertJavaMcworld(zip){
   }
 }
 
+// Handle Bedrock .mcworld
+async function handleBedrockMcworld(zip){
+  // find any schematics inside the ZIP
+  const schematicFiles = Object.keys(zip.files).filter(p =>
+    p.endsWith(".schem") || p.endsWith(".schematic") || p.endsWith(".litematic")
+  );
+
+  if(schematicFiles.length === 0){
+    setStatus("No schematics found inside Bedrock world. Please export builds first.");
+    return;
+  }
+
+  setStatus(`Found ${schematicFiles.length} schematic(s). Converting...`);
+
+  for(const path of schematicFiles){
+    const fileData = await zip.files[path].async("blob");
+    try{
+      const result = await m2b.convertFile(fileData);
+      downloadBlob(result.blob, result.filename);
+    }catch(e){
+      console.error("Conversion failed for", path, e);
+    }
+  }
+
+  setStatus("All schematics converted to Bloxd.io!");
+}
+
 // Download helper
 function downloadBlob(blob, filename="output.bloxdschem"){
   const url = URL.createObjectURL(blob);
@@ -156,4 +184,3 @@ function downloadBlob(blob, filename="output.bloxdschem"){
 </script>
 </body>
 </html>
-
