@@ -14,8 +14,8 @@ pre{background:#f6f6f6;padding:.75rem;border-radius:6px;overflow:auto;}
 </head>
 <body>
 <h1>Minecraft World → Bloxd Schematic Converter</h1>
-<p>Drop a <b>.mcworld</b>, <b>.schem</b>, <b>.schematic</b>, or <b>.litematic</b> file below.<br>
-The tool will convert it to <code>.bloxdschem</code> for Bloxd.io.</p>
+<p>Drop a <b>.mcworld</b>, <b>.zip</b>, <b>.schem</b>, <b>.schematic</b>, or <b>.litematic</b> file below.<br>
+The tool will convert everything possible to <code>.bloxdschem</code> for Bloxd.io.</p>
 
 <div id="drop" class="drop">
 <p>Drop your file here<br>or click to pick</p>
@@ -50,7 +50,7 @@ fileInput.addEventListener("change",async(ev)=>{
   if(name.endsWith(".schem")||name.endsWith(".schematic")||name.endsWith(".litematic")){
     convertWithM2B(f);
   } else if(name.endsWith(".mcworld")||name.endsWith(".zip")){
-    handleMcworld(f);
+    handleZipOrMcworld(f);
   } else {
     setStatus("Unsupported file type.");
   }
@@ -66,30 +66,35 @@ async function convertWithM2B(blob){
   }catch(e){setStatus("Conversion failed: "+e);}
 }
 
-async function handleMcworld(f){
+// Recursively scan ZIP for convertable files
+async function scanZipFolder(zip){
+  const convertList=[];
+  zip.forEach((path, entry)=>{
+    if(entry.dir) return; // skip folders themselves
+    const l=path.toLowerCase();
+    if(l.endsWith(".schem") || l.endsWith(".schematic") || l.endsWith(".litematic")){
+      convertList.push(entry);
+    }
+  });
+  return convertList;
+}
+
+async function handleZipOrMcworld(f){
   try{
-    setStatus("Unzipping .mcworld...");
+    setStatus("Unzipping file...");
     const buf=await f.arrayBuffer();
     const zip=await JSZip.loadAsync(buf);
 
-    const found=[];
-    let isFullWorld=false;
+    const schemFiles=await scanZipFolder(zip);
+    const hasFullWorld=!!Object.keys(zip.files).some(p=>p.toLowerCase().endsWith("level.dat"));
 
-    zip.forEach((path,entry)=>{
-      const l=path.toLowerCase();
-      if(l.endsWith(".schem")||l.endsWith(".schematic")||l.endsWith(".litematic")) found.push({path,entry});
-      if(l.endsWith("level.dat")) isFullWorld=true;
-    });
-
-    if(found.length>0){
-      // Convert first schematic by default
-      const first=found[0];
-      setStatus("Found schematic: "+first.path);
-      const blob=await first.entry.async("blob");
+    if(schemFiles.length>0){
+      setStatus(`Found ${schemFiles.length} schematic(s). Converting first one...`);
+      const blob=await schemFiles[0].async("blob");
       convertWithM2B(blob);
     }
 
-    if(isFullWorld){
+    if(hasFullWorld){
       const btnSingle=document.createElement("button");
       btnSingle.textContent="Convert Full World → Single Schematic";
       btnSingle.onclick=()=>convertFullWorldSingle(zip);
@@ -103,63 +108,55 @@ async function handleMcworld(f){
       setStatus("Full world detected. Choose conversion method below.");
     }
 
-    if(found.length===0&&!isFullWorld){
-      setStatus("No schematics found inside this world.");
+    if(schemFiles.length===0 && !hasFullWorld){
+      setStatus("No convertable files found inside the ZIP.");
     }
 
-  }catch(e){setStatus("Error reading .mcworld: "+e);}
+  }catch(e){setStatus("Error reading ZIP: "+e);}
 }
 
-// Placeholder: single schematic combining all blocks
+// Convert everything into single schematic (combined ZIP)
 async function convertFullWorldSingle(zip){
   setStatus("Converting full world → single schematic...");
   try{
-    // For demo: just collects all schematics inside, combine
-    const allBlobs=[];
-    zip.forEach((path,entry)=>{
+    const blobs=[];
+    zip.forEach((path, entry)=>{
+      if(entry.dir) return;
       const l=path.toLowerCase();
-      if(l.endsWith(".schem")||l.endsWith(".schematic")||l.endsWith(".litematic")){
-        allBlobs.push(entry.async("blob"));
+      if(l.endsWith(".schem") || l.endsWith(".schematic") || l.endsWith(".litematic")){
+        blobs.push(entry.async("blob"));
       }
     });
-    const blobs=await Promise.all(allBlobs);
-    if(blobs.length===0){setStatus("No schematics inside for single conversion."); return;}
-    
+    const results=await Promise.all(blobs.map(b=>b.then(blob=>m2b.convertFile(blob))));
+    if(results.length===0){setStatus("No convertable schematics found."); return;}
     const zipOutput=new JSZip();
-    for(let i=0;i<blobs.length;i++){
-      const result=await m2b.convertFile(blobs[i]);
-      zipOutput.file(result.filename,result.blob);
-    }
-    const combined=await zipOutput.generateAsync({type:"blob"});
-    downloadBlob(combined,"full_world_combined.bloxdschem.zip");
+    results.forEach(r=>zipOutput.file(r.filename,r.blob));
+    const content=await zipOutput.generateAsync({type:"blob"});
+    downloadBlob(content,"full_world_combined.bloxdschem.zip");
     setStatus("Full world single schematic downloaded (ZIP containing all converted).");
   }catch(e){setStatus("Conversion failed: "+e);}
 }
 
-// Placeholder: multiple schematics per region
+// Convert everything into multiple schematics ZIP
 async function convertFullWorldMulti(zip){
   setStatus("Converting full world → multiple schematics...");
   try{
-    const allBlobs=[];
-    zip.forEach((path,entry)=>{
+    const blobs=[];
+    zip.forEach((path, entry)=>{
+      if(entry.dir) return;
       const l=path.toLowerCase();
-      if(l.endsWith(".schem")||l.endsWith(".schematic")||l.endsWith(".litematic")){
-        allBlobs.push(entry.async("blob"));
+      if(l.endsWith(".schem") || l.endsWith(".schematic") || l.endsWith(".litematic")){
+        blobs.push(entry.async("blob"));
       }
     });
-    const blobs=await Promise.all(allBlobs);
-    if(blobs.length===0){setStatus("No schematics inside for multi conversion."); return;}
-
+    const results=await Promise.all(blobs.map(b=>b.then(blob=>m2b.convertFile(blob))));
+    if(results.length===0){setStatus("No convertable schematics found."); return;}
     const zipOutput=new JSZip();
-    for(let i=0;i<blobs.length;i++){
-      const result=await m2b.convertFile(blobs[i]);
-      zipOutput.file(result.filename,result.blob);
-    }
-
+    results.forEach(r=>zipOutput.file(r.filename,r.blob));
     const content=await zipOutput.generateAsync({type:"blob"});
     downloadBlob(content,"full_world_schematics.zip");
     setStatus("Full world multiple schematics downloaded as ZIP.");
-  }catch(e){setStatus("Full world multi conversion failed: "+e);}
+  }catch(e){setStatus("Conversion failed: "+e);}
 }
 
 function downloadBlob(blob,filename="output.bloxdschem"){
