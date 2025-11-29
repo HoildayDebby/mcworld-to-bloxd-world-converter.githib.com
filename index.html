@@ -28,10 +28,10 @@ The tool will convert Minecraft world blocks or schematics into <code>.bloxdsche
 <script src="vendor/m2b.js"></script>
 <script>
 // Elements
-const drop=document.getElementById("drop");
-const fileInput=document.getElementById("file");
-const status=document.getElementById("status");
-const actions=document.getElementById("actions");
+const drop = document.getElementById("drop");
+const fileInput = document.getElementById("file");
+const status = document.getElementById("status");
+const actions = document.getElementById("actions");
 
 function setStatus(t){status.textContent=t;}
 function clearActions(){actions.innerHTML="";}
@@ -44,97 +44,91 @@ drop.addEventListener("drop",e=>{
   e.preventDefault(); drop.classList.remove("dragover");
   const f=e.dataTransfer.files[0];
   if(!f) return;
-  fileInput.files=e.dataTransfer.files;
+  fileInput.files = e.dataTransfer.files;
   fileInput.dispatchEvent(new Event("change"));
 });
 
 // Handle file selection
-fileInput.addEventListener("change",async(ev)=>{
+fileInput.addEventListener("change", async (ev) => {
   clearActions();
-  const f=ev.target.files[0];
+  const f = ev.target.files[0];
   if(!f) return;
-  const name=f.name.toLowerCase();
+  const name = f.name.toLowerCase();
   setStatus("Processing: "+f.name);
 
-  if(name.endsWith(".schem")||name.endsWith(".schematic")||name.endsWith(".litematic")){
+  if(name.endsWith(".schem") || name.endsWith(".schematic") || name.endsWith(".litematic")){
     convertWithM2B(f);
-  } else if(name.endsWith(".mcworld")){
+  } else if(name.endsWith(".mcworld")) {
     handleMcworldFile(f);
   } else {
     setStatus("Unsupported file type.");
   }
 });
 
-// Convert single schematic files
+// Convert schematic files
 async function convertWithM2B(blob){
   try{
     setStatus("Converting → .bloxdschem ...");
-    if(!window.m2b||!m2b.convertFile) throw "M2B converter missing";
-    const result=await m2b.convertFile(blob);
-    downloadBlob(result.blob,result.filename);
+    if(!window.m2b || !m2b.convertFile) throw "M2B converter missing";
+    const result = await m2b.convertFile(blob);
+    downloadBlob(result.blob, result.filename);
     setStatus("Done! File downloaded.");
   }catch(e){setStatus("Conversion failed: "+e);}
 }
 
-// Handle .mcworld files directly
+// Handle .mcworld files
 async function handleMcworldFile(f){
   try{
     setStatus("Reading .mcworld...");
     const buf = await f.arrayBuffer();
     const zip = await JSZip.loadAsync(buf);
 
-    // Detect level.dat to confirm it's a full world
-    const isFullWorld = Object.keys(zip.files).some(p=>p.toLowerCase().endsWith("level.dat"));
-    if(!isFullWorld){
+    const hasWorld = Object.keys(zip.files).some(p => p.toLowerCase().endsWith("level.dat"));
+    if(!hasWorld){
       setStatus("No level.dat found. This is not a valid Minecraft world.");
       return;
     }
 
-    // Show conversion buttons
-    const btnSingle=document.createElement("button");
-    btnSingle.textContent="Convert Full World → Single Schematic";
-    btnSingle.onclick=()=>convertFullWorldSingle(zip);
+    setStatus("Full Minecraft world detected.");
+
+    // Show conversion options
+    const btnSingle = document.createElement("button");
+    btnSingle.textContent = "Convert Full World → Single Schematic";
+    btnSingle.onclick = () => {
+      alert("Full world block conversion not implemented yet. Coming soon!");
+    };
     actions.appendChild(btnSingle);
 
-    const btnMulti=document.createElement("button");
-    btnMulti.textContent="Convert Full World → Multiple Schematics (ZIP)";
-    btnMulti.onclick=()=>convertFullWorldMulti(zip);
+    const btnMulti = document.createElement("button");
+    btnMulti.textContent = "Convert Full World → Multiple Schematics (ZIP)";
+    btnMulti.onclick = () => {
+      alert("Full world block conversion not implemented yet. Coming soon!");
+    };
     actions.appendChild(btnMulti);
 
-    setStatus("Full Minecraft world detected. Choose conversion method below.");
-  }catch(e){setStatus("Error reading .mcworld: "+e);}
-}
+    // Check for any schematics inside mcworld
+    const schemFiles = Object.keys(zip.files).filter(p => {
+      const l = p.toLowerCase();
+      return l.endsWith(".schem") || l.endsWith(".schematic") || l.endsWith(".litematic");
+    });
 
-// Convert all region blocks into a single schematic
-async function convertFullWorldSingle(zip){
-  setStatus("Converting full world → single schematic...");
-  try{
-    // Here you would parse all region files (*.mca) and map blocks
-    // Placeholder: just download the .mcworld as-is for demo
-    const blob = await zip.generateAsync({type:"blob"});
-    downloadBlob(blob,"full_world_single.bloxdschem.zip");
-    setStatus("Full world conversion complete (placeholder ZIP).");
-  }catch(e){setStatus("Conversion failed: "+e);}
-}
+    if(schemFiles.length > 0){
+      setStatus(`Found ${schemFiles.length} schematic(s) inside .mcworld. Converting first one...`);
+      const blob = await zip.files[schemFiles[0]].async("blob");
+      convertWithM2B(blob);
+    }
 
-// Convert all region blocks into multiple schematics (ZIP)
-async function convertFullWorldMulti(zip){
-  setStatus("Converting full world → multiple schematics...");
-  try{
-    // Here you would split blocks per region and convert
-    // Placeholder: download entire .mcworld as multiple schematics ZIP
-    const blob = await zip.generateAsync({type:"blob"});
-    downloadBlob(blob,"full_world_multi_schematics.zip");
-    setStatus("Full world multiple schematics downloaded (placeholder).");
-  }catch(e){setStatus("Conversion failed: "+e);}
+  } catch(e) {
+    setStatus("Error reading .mcworld: " + e);
+  }
 }
 
 // Download helper
-function downloadBlob(blob,filename="output.bloxdschem"){
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;
-  a.download=filename;
+function downloadBlob(blob, filename="output.bloxdschem"){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -143,4 +137,3 @@ function downloadBlob(blob,filename="output.bloxdschem"){
 </script>
 </body>
 </html>
-
