@@ -57,12 +57,17 @@ fileInput.addEventListener("change", async(ev)=>{
   const name = f.name.toLowerCase();
   setStatus("Processing: "+f.name);
 
-  if(name.endsWith(".schem")||name.endsWith(".schematic")||name.endsWith(".litematic")){
-    convertWithM2B(f);
-  } else if(name.endsWith(".mcworld")){
-    await handleMcworld(f);
-  } else {
-    setStatus("Unsupported file type.");
+  try {
+    if(name.endsWith(".schem") || name.endsWith(".schematic") || name.endsWith(".litematic")){
+      await convertWithM2B(f);
+    } else if(name.endsWith(".mcworld")){
+      await handleMcworld(f);
+    } else {
+      setStatus("Unsupported file type.");
+    }
+  } catch(e){
+    console.error(e);
+    setStatus("Error processing file: "+e);
   }
 });
 
@@ -76,75 +81,66 @@ async function convertWithM2B(blob){
   }catch(e){setStatus("Conversion failed: "+e);}
 }
 
-// Handle .mcworld
+// Handle .mcworld files
 async function handleMcworld(f){
-  try{
-    const buf = await f.arrayBuffer();
-    const zip = await JSZip.loadAsync(buf);
+  const buf = await f.arrayBuffer();
+  const zip = await JSZip.loadAsync(buf);
 
-    const isJava = Object.keys(zip.files).some(p=>p.startsWith("region/"));
-    const isBedrock = Object.keys(zip.files).some(p=>p.startsWith("db/"));
+  const isJava = Object.keys(zip.files).some(p=>p.startsWith("region/"));
+  const isBedrock = Object.keys(zip.files).some(p=>p.startsWith("db/"));
 
-    if(isJava){
-      convertJavaMcworld(zip);
-    } else if(isBedrock){
-      await handleBedrockMcworld(zip);
-    } else {
-      setStatus("No recognizable world data found.");
-    }
-
-  }catch(e){
-    setStatus("Error reading .mcworld: "+e);
+  if(isJava){
+    await convertJavaMcworld(zip);
+  } else if(isBedrock){
+    await handleBedrockMcworld(zip);
+  } else {
+    setStatus("No recognizable world data found.");
   }
 }
 
-// Convert Java .mcworld
+// Java .mcworld conversion
 async function convertJavaMcworld(zip){
-  try{
-    setStatus("Java .mcworld detected. Parsing region files...");
+  setStatus("Java .mcworld detected. Parsing region files...");
 
-    const regionFiles = Object.keys(zip.files).filter(p=>p.startsWith("region/") && p.endsWith(".mca"));
-    if(regionFiles.length===0){
-      setStatus("No region files found.");
-      return;
-    }
+  const regionFiles = Object.keys(zip.files).filter(p=>p.startsWith("region/") && p.endsWith(".mca"));
+  if(regionFiles.length === 0){
+    setStatus("No region files found. Cannot convert.");
+    return;
+  }
 
-    let tempSchematic = {width:0,height:0,length:0,blocks:[],palette:{}};
+  let tempSchematic = {width:0,height:0,length:0,blocks:[],palette:{}};
 
-    for(const rFile of regionFiles){
-      const data = await zip.files[rFile].async("arrayBuffer");
+  for(let i=0;i<regionFiles.length;i++){
+    setStatus(`Parsing region ${i+1}/${regionFiles.length} ...`);
+    const rFile = regionFiles[i];
+    const data = await zip.files[rFile].async("arrayBuffer");
 
-      // TODO: implement parseMCAtoChunks using nbt.js
-      const chunks = parseMCAtoChunks(data); // return array of {chunkX, chunkZ, blocks:[{x,y,z,id}]}
+    // TODO: implement parseMCAtoChunks(data) → array of {chunkX, chunkZ, blocks:[{x,y,z,id}]}
+    const chunks = parseMCAtoChunks(data);
 
-      for(const chunk of chunks){
-        for(const block of chunk.blocks){
-          tempSchematic.blocks.push({
-            x: block.x + chunk.chunkX*16,
-            y: block.y,
-            z: block.z + chunk.chunkZ*16,
-            name: block.id
-          });
-          tempSchematic.width = Math.max(tempSchematic.width, block.x + chunk.chunkX*16 +1);
-          tempSchematic.height = Math.max(tempSchematic.height, block.y+1);
-          tempSchematic.length = Math.max(tempSchematic.length, block.z + chunk.chunkZ*16 +1);
-        }
+    for(const chunk of chunks){
+      for(const block of chunk.blocks){
+        tempSchematic.blocks.push({
+          x: block.x + chunk.chunkX*16,
+          y: block.y,
+          z: block.z + chunk.chunkZ*16,
+          name: block.id
+        });
+        tempSchematic.width = Math.max(tempSchematic.width, block.x + chunk.chunkX*16 +1);
+        tempSchematic.height = Math.max(tempSchematic.height, block.y+1);
+        tempSchematic.length = Math.max(tempSchematic.length, block.z + chunk.chunkZ*16 +1);
       }
     }
-
-    setStatus("Building Bloxd.io schematic...");
-    const result = await m2b.convertSchematicObject(tempSchematic);
-    downloadBlob(result.blob, "world.bloxdschem");
-    setStatus("Done! Bloxd.io schematic ready.");
-
-  }catch(e){
-    setStatus("Error converting Java .mcworld: "+e);
   }
+
+  setStatus("Building Bloxd.io schematic...");
+  const result = await m2b.convertSchematicObject(tempSchematic);
+  downloadBlob(result.blob, "world.bloxdschem");
+  setStatus("Done! Bloxd.io schematic ready.");
 }
 
-// Handle Bedrock .mcworld
+// Bedrock .mcworld conversion: find internal schematics
 async function handleBedrockMcworld(zip){
-  // find any schematics inside the ZIP
   const schematicFiles = Object.keys(zip.files).filter(p =>
     p.endsWith(".schem") || p.endsWith(".schematic") || p.endsWith(".litematic")
   );
@@ -156,7 +152,9 @@ async function handleBedrockMcworld(zip){
 
   setStatus(`Found ${schematicFiles.length} schematic(s). Converting...`);
 
-  for(const path of schematicFiles){
+  for(let i=0;i<schematicFiles.length;i++){
+    const path = schematicFiles[i];
+    setStatus(`Converting schematic ${i+1}/${schematicFiles.length}: ${path}`);
     const fileData = await zip.files[path].async("blob");
     try{
       const result = await m2b.convertFile(fileData);
@@ -179,6 +177,12 @@ function downloadBlob(blob, filename="output.bloxdschem"){
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+// Dummy parseMCAtoChunks placeholder — you need actual implementation
+function parseMCAtoChunks(arrayBuffer){
+  // TODO: replace with real MCA parsing
+  return []; // empty array to prevent crashes if not implemented
 }
 
 </script>
