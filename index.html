@@ -14,13 +14,13 @@ pre{background:#f6f6f6;padding:.75rem;border-radius:6px;overflow:auto;}
 </head>
 <body>
 <h1>Minecraft World → Bloxd Schematic Converter</h1>
-<p>Drop a <b>.mcworld</b> (Java or Bedrock) or a schematic file (.schem/.litematic/.schematic) below.<br>
+<p>Drop a <b>.mcworld</b> (Java or Bedrock), a Java world folder, or a schematic file (.schem/.litematic/.schematic) below.<br>
 Java worlds will be converted to a schematic first, then into <code>.bloxdschem</code>. <br>
-Bedrock worlds must be exported as schematics first.</p>
+Bedrock worlds/folders must be exported as schematics first.</p>
 
 <div id="drop" class="drop">
-<p>Drop your file here<br>or click to pick</p>
-<input id="file" type="file" hidden />
+<p>Drop your file or folder here<br>or click to pick</p>
+<input id="file" type="file" hidden webkitdirectory directory multiple />
 <div id="status"></div>
 <div id="actions"></div>
 </div>
@@ -44,30 +44,43 @@ drop.addEventListener("dragleave",()=>drop.classList.remove("dragover"));
 drop.addEventListener("drop", e=>{
     e.preventDefault();
     drop.classList.remove("dragover");
-    const f = e.dataTransfer.files[0];
-    if(!f) return;
-    fileInput.files = e.dataTransfer.files;
+    const files = e.dataTransfer.files;
+    if(files.length===0) return;
+    fileInput.files = files;
     fileInput.dispatchEvent(new Event("change"));
 });
 
 fileInput.addEventListener("change", async(e)=>{
     clearActions();
-    const f = e.target.files[0];
-    if(!f) return;
-    const name = f.name.toLowerCase();
-    setStatus("Processing: "+f.name);
+    const files = Array.from(e.target.files);
+    if(files.length===0) return;
 
-    try{
-        if(name.endsWith(".schem") || name.endsWith(".schematic") || name.endsWith(".litematic")){
-            await convertSchemToBloxd(f);
-        } else if(name.endsWith(".mcworld")){
-            await handleMcworld(f);
+    setStatus("Processing files...");
+
+    // Check for standalone schematics
+    const schemFile = files.find(f=>f.name.toLowerCase().match(/\.(schem|schematic|litematic)$/));
+    if(schemFile){
+        await convertSchemToBloxd(schemFile);
+        return;
+    }
+
+    // Check for Java folder
+    const hasRegion = files.some(f=>f.webkitRelativePath.startsWith("region/") && f.name.endsWith(".mca"));
+    const hasDB = files.some(f=>f.webkitRelativePath.startsWith("db/"));
+    const hasManifest = files.some(f=>f.name==="manifest.json");
+
+    if(hasRegion){
+        await convertJavaFolder(files);
+    } else if(hasDB && hasManifest){
+        setStatus("Bedrock world detected. Full world conversion not supported in-browser. Export build as .schem first.");
+    } else {
+        // If it is a zip file, try to open as Java .mcworld zip
+        const zipFile = files.find(f=>f.name.toLowerCase().endsWith(".mcworld"));
+        if(zipFile){
+            await handleMcworld(zipFile);
         } else {
-            setStatus("Unsupported file type.");
+            setStatus("No recognizable world data found.");
         }
-    } catch(err){
-        console.error(err);
-        setStatus("Error: "+err);
     }
 });
 
@@ -83,30 +96,11 @@ async function convertSchemToBloxd(file){
     }
 }
 
-// Handle .mcworld files
-async function handleMcworld(f){
-    const buf = await f.arrayBuffer();
-    const zip = await JSZip.loadAsync(buf);
+// Convert Java folder with region files
+async function convertJavaFolder(files){
+    setStatus("Java folder detected. Reading region files...");
 
-    // Java detection
-    const isJava = Object.keys(zip.files).some(p => p.startsWith("region/") && p.endsWith(".mca"));
-    // Bedrock detection
-    const isBedrock = Object.keys(zip.files).some(p => p.startsWith("db/")) && Object.keys(zip.files).some(p => p === "manifest.json");
-
-    if(isJava){
-        await convertJavaMcworld(zip);
-    } else if(isBedrock){
-        setStatus("Bedrock .mcworld detected. Full world conversion is not supported in-browser. Please export your build as a .schem first to convert.");
-    } else {
-        setStatus("No recognizable world data found.");
-    }
-}
-
-// Java .mcworld conversion
-async function convertJavaMcworld(zip){
-    setStatus("Java .mcworld detected. Extracting region files...");
-
-    const regionFiles = Object.keys(zip.files).filter(p=>p.startsWith("region/") && p.endsWith(".mca"));
+    const regionFiles = files.filter(f => f.webkitRelativePath.startsWith("region/") && f.name.endsWith(".mca"));
     if(regionFiles.length===0){
         setStatus("No region files found. Cannot convert.");
         return;
@@ -116,9 +110,9 @@ async function convertJavaMcworld(zip){
 
     for(let i=0;i<regionFiles.length;i++){
         setStatus(`Parsing region ${i+1}/${regionFiles.length}`);
-        const rFile = regionFiles[i];
-        const data = await zip.files[rFile].async("arrayBuffer");
-        const chunks = parseMCAtoChunks(data); // Implement MCA parser
+        const file = regionFiles[i];
+        const buf = await file.arrayBuffer();
+        const chunks = parseMCAtoChunks(buf); // Implement MCA parser
         for(const chunk of chunks){
             for(const block of chunk.blocks){
                 tempSchem.blocks.push({
@@ -127,9 +121,9 @@ async function convertJavaMcworld(zip){
                     z:block.z + chunk.chunkZ*16,
                     name:block.id
                 });
-                tempSchem.width = Math.max(tempSchem.width, block.x+chunk.chunkX*16+1);
-                tempSchem.height = Math.max(tempSchem.height, block.y+1);
-                tempSchem.length = Math.max(tempSchem.length, block.z+chunk.chunkZ*16+1);
+                tempSchem.width = Math.max(tempSchem.width, block.x + chunk.chunkX*16 + 1);
+                tempSchem.height = Math.max(tempSchem.height, block.y + 1);
+                tempSchem.length = Math.max(tempSchem.length, block.z + chunk.chunkZ*16 + 1);
             }
         }
     }
@@ -140,6 +134,60 @@ async function convertJavaMcworld(zip){
     setStatus("Done! Bloxd schematic ready.");
 }
 
+// Handle Java .mcworld zip
+async function handleMcworld(f){
+    const buf = await f.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+
+    const isJava = Object.keys(zip.files).some(p => p.startsWith("region/") && p.endsWith(".mca"));
+    const isBedrock = Object.keys(zip.files).some(p => p.startsWith("db/")) && Object.keys(zip.files).some(p => p === "manifest.json");
+
+    if(isJava){
+        await convertJavaZip(zip);
+    } else if(isBedrock){
+        setStatus("Bedrock .mcworld detected. Full world conversion is not supported in-browser. Please export your build as a .schem first to convert.");
+    } else {
+        setStatus("No recognizable world data found.");
+    }
+}
+
+// Convert Java zip
+async function convertJavaZip(zip){
+    setStatus("Java .mcworld detected. Extracting region files...");
+    const regionFiles = Object.keys(zip.files).filter(p=>p.startsWith("region/") && p.endsWith(".mca"));
+    if(regionFiles.length===0){
+        setStatus("No region files found. Cannot convert.");
+        return;
+    }
+
+    let tempSchem = {width:0,height:0,length:0,blocks:[],palette:{}};
+
+    for(let i=0;i<regionFiles.length;i++){
+        setStatus(`Parsing region ${i+1}/${regionFiles.length}`);
+        const data = await zip.files[regionFiles[i]].async("arrayBuffer");
+        const chunks = parseMCAtoChunks(data); // Implement MCA parser
+        for(const chunk of chunks){
+            for(const block of chunk.blocks){
+                tempSchem.blocks.push({
+                    x:block.x + chunk.chunkX*16,
+                    y:block.y,
+                    z:block.z + chunk.chunkZ*16,
+                    name:block.id
+                });
+                tempSchem.width = Math.max(tempSchem.width, block.x + chunk.chunkX*16 + 1);
+                tempSchem.height = Math.max(tempSchem.height, block.y + 1);
+                tempSchem.length = Math.max(tempSchem.length, block.z + chunk.chunkZ*16 + 1);
+            }
+        }
+    }
+
+    setStatus("Converting extracted blocks → Bloxd schematic...");
+    const result = await m2b.convertSchematicObject(tempSchem);
+    downloadBlob(result.blob, "world.bloxdschem");
+    setStatus("Done! Bloxd schematic ready.");
+}
+
+// Download helper
 function downloadBlob(blob, filename){
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
