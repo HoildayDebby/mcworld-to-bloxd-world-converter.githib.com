@@ -14,8 +14,8 @@ pre{background:#f6f6f6;padding:.75rem;border-radius:6px;overflow:auto;}
 </head>
 <body>
 <h1>Minecraft World → Bloxd Schematic Converter</h1>
-<p>Drop a <b>.mcworld</b>, <b>.schem</b>, <b>.schematic</b>, or <b>.litematic</b> file below.<br>
-Converts Minecraft world blocks or schematics into <code>.bloxdschem</code> for Bloxd.io.</p>
+<p>Drop a <b>.mcworld</b> (Java) or a schematic file (.schem/.litematic) below.<br>
+Java worlds will be converted into a Minecraft schematic first, then into <code>.bloxdschem</code>.</p>
 
 <div id="drop" class="drop">
 <p>Drop your file here<br>or click to pick</p>
@@ -26,7 +26,7 @@ Converts Minecraft world blocks or schematics into <code>.bloxdschem</code> for 
 
 <script src="vendor/jszip.min.js"></script>
 <script src="vendor/m2b.js"></script>
-<script src="vendor/nbt.js"></script> <!-- NBT parser -->
+<script src="vendor/nbt.js"></script>
 
 <script>
 const drop = document.getElementById("drop");
@@ -34,157 +34,108 @@ const fileInput = document.getElementById("file");
 const status = document.getElementById("status");
 const actions = document.getElementById("actions");
 
-function setStatus(t){status.textContent=t;}
-function clearActions(){actions.innerHTML="";}
+function setStatus(msg){ status.textContent = msg; }
+function clearActions(){ actions.innerHTML = ""; }
 
-// Drag & Drop
 drop.addEventListener("click",()=>fileInput.click());
-drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("dragover");});
+drop.addEventListener("dragover",e=>{ e.preventDefault(); drop.classList.add("dragover"); });
 drop.addEventListener("dragleave",()=>drop.classList.remove("dragover"));
-drop.addEventListener("drop",e=>{
-  e.preventDefault(); drop.classList.remove("dragover");
-  const f = e.dataTransfer.files[0];
-  if(!f) return;
-  fileInput.files = e.dataTransfer.files;
-  fileInput.dispatchEvent(new Event("change"));
+drop.addEventListener("drop", e=>{
+    e.preventDefault();
+    drop.classList.remove("dragover");
+    const f = e.dataTransfer.files[0];
+    if(!f) return;
+    fileInput.files = e.dataTransfer.files;
+    fileInput.dispatchEvent(new Event("change"));
 });
 
-// File selection
-fileInput.addEventListener("change", async(ev)=>{
-  clearActions();
-  const f = ev.target.files[0];
-  if(!f) return;
-  const name = f.name.toLowerCase();
-  setStatus("Processing: "+f.name);
+fileInput.addEventListener("change", async(e)=>{
+    clearActions();
+    const f = e.target.files[0];
+    if(!f) return;
+    const name = f.name.toLowerCase();
+    setStatus("Processing: "+f.name);
 
-  try {
-    if(name.endsWith(".schem") || name.endsWith(".schematic") || name.endsWith(".litematic")){
-      await convertWithM2B(f);
-    } else if(name.endsWith(".mcworld")){
-      await handleMcworld(f);
-    } else {
-      setStatus("Unsupported file type.");
-    }
-  } catch(e){
-    console.error(e);
-    setStatus("Error processing file: "+e);
-  }
-});
-
-// Convert schematic files
-async function convertWithM2B(blob){
-  try{
-    setStatus("Converting → .bloxdschem ...");
-    const result = await m2b.convertFile(blob);
-    downloadBlob(result.blob, result.filename);
-    setStatus("Done! File downloaded.");
-  }catch(e){setStatus("Conversion failed: "+e);}
-}
-
-// Handle .mcworld files
-async function handleMcworld(f){
-  const buf = await f.arrayBuffer();
-  const zip = await JSZip.loadAsync(buf);
-
-  const isJava = Object.keys(zip.files).some(p=>p.startsWith("region/"));
-  const isBedrock = Object.keys(zip.files).some(p=>p.startsWith("db/"));
-
-  if(isJava){
-    await convertJavaMcworld(zip);
-  } else if(isBedrock){
-    await handleBedrockMcworld(zip);
-  } else {
-    setStatus("No recognizable world data found.");
-  }
-}
-
-// Java .mcworld conversion
-async function convertJavaMcworld(zip){
-  setStatus("Java .mcworld detected. Parsing region files...");
-
-  const regionFiles = Object.keys(zip.files).filter(p=>p.startsWith("region/") && p.endsWith(".mca"));
-  if(regionFiles.length === 0){
-    setStatus("No region files found. Cannot convert.");
-    return;
-  }
-
-  let tempSchematic = {width:0,height:0,length:0,blocks:[],palette:{}};
-
-  for(let i=0;i<regionFiles.length;i++){
-    setStatus(`Parsing region ${i+1}/${regionFiles.length} ...`);
-    const rFile = regionFiles[i];
-    const data = await zip.files[rFile].async("arrayBuffer");
-
-    // TODO: implement parseMCAtoChunks(data) → array of {chunkX, chunkZ, blocks:[{x,y,z,id}]}
-    const chunks = parseMCAtoChunks(data);
-
-    for(const chunk of chunks){
-      for(const block of chunk.blocks){
-        tempSchematic.blocks.push({
-          x: block.x + chunk.chunkX*16,
-          y: block.y,
-          z: block.z + chunk.chunkZ*16,
-          name: block.id
-        });
-        tempSchematic.width = Math.max(tempSchematic.width, block.x + chunk.chunkX*16 +1);
-        tempSchematic.height = Math.max(tempSchematic.height, block.y+1);
-        tempSchematic.length = Math.max(tempSchematic.length, block.z + chunk.chunkZ*16 +1);
-      }
-    }
-  }
-
-  setStatus("Building Bloxd.io schematic...");
-  const result = await m2b.convertSchematicObject(tempSchematic);
-  downloadBlob(result.blob, "world.bloxdschem");
-  setStatus("Done! Bloxd.io schematic ready.");
-}
-
-// Bedrock .mcworld conversion: find internal schematics
-async function handleBedrockMcworld(zip){
-  const schematicFiles = Object.keys(zip.files).filter(p =>
-    p.endsWith(".schem") || p.endsWith(".schematic") || p.endsWith(".litematic")
-  );
-
-  if(schematicFiles.length === 0){
-    setStatus("No schematics found inside Bedrock world. Please export builds first.");
-    return;
-  }
-
-  setStatus(`Found ${schematicFiles.length} schematic(s). Converting...`);
-
-  for(let i=0;i<schematicFiles.length;i++){
-    const path = schematicFiles[i];
-    setStatus(`Converting schematic ${i+1}/${schematicFiles.length}: ${path}`);
-    const fileData = await zip.files[path].async("blob");
     try{
-      const result = await m2b.convertFile(fileData);
-      downloadBlob(result.blob, result.filename);
-    }catch(e){
-      console.error("Conversion failed for", path, e);
+        if(name.endsWith(".schem") || name.endsWith(".schematic") || name.endsWith(".litematic")){
+            await convertSchemToBloxd(f);
+        } else if(name.endsWith(".mcworld")){
+            await convertJavaMcworld(f);
+        } else {
+            setStatus("Unsupported file type.");
+        }
+    } catch(err){
+        console.error(err);
+        setStatus("Error: "+err);
     }
-  }
+});
 
-  setStatus("All schematics converted to Bloxd.io!");
+async function convertSchemToBloxd(file){
+    setStatus("Converting schematic → Bloxd...");
+    try{
+        const result = await m2b.convertFile(file);
+        downloadBlob(result.blob, result.filename);
+        setStatus("Done! Bloxd schematic downloaded.");
+    }catch(e){
+        setStatus("Conversion failed: "+e);
+    }
 }
 
-// Download helper
-function downloadBlob(blob, filename="output.bloxdschem"){
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+async function convertJavaMcworld(file){
+    setStatus("Java .mcworld detected. Extracting region files...");
+    const buf = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+
+    const regionFiles = Object.keys(zip.files).filter(p=>p.startsWith("region/") && p.endsWith(".mca"));
+    if(regionFiles.length===0){
+        setStatus("No region files found. Cannot convert.");
+        return;
+    }
+
+    let tempSchem = {width:0,height:0,length:0,blocks:[],palette:{}};
+
+    for(let i=0;i<regionFiles.length;i++){
+        setStatus(`Parsing region ${i+1}/${regionFiles.length}`);
+        const rFile = regionFiles[i];
+        const data = await zip.files[rFile].async("arrayBuffer");
+        const chunks = parseMCAtoChunks(data);
+        for(const chunk of chunks){
+            for(const block of chunk.blocks){
+                tempSchem.blocks.push({
+                    x:block.x + chunk.chunkX*16,
+                    y:block.y,
+                    z:block.z + chunk.chunkZ*16,
+                    name:block.id
+                });
+                tempSchem.width = Math.max(tempSchem.width, block.x+chunk.chunkX*16+1);
+                tempSchem.height = Math.max(tempSchem.height, block.y+1);
+                tempSchem.length = Math.max(tempSchem.length, block.z+chunk.chunkZ*16+1);
+            }
+        }
+    }
+
+    setStatus("Converting extracted blocks → Bloxd schematic...");
+    const result = await m2b.convertSchematicObject(tempSchem);
+    downloadBlob(result.blob, "world.bloxdschem");
+    setStatus("Done! Bloxd schematic ready.");
 }
 
-// Dummy parseMCAtoChunks placeholder — you need actual implementation
+function downloadBlob(blob, filename){
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+// Placeholder for MCA parsing
 function parseMCAtoChunks(arrayBuffer){
-  // TODO: replace with real MCA parsing
-  return []; // empty array to prevent crashes if not implemented
+    // Implement actual MCA parsing here using NBT.js
+    return [];
 }
-
 </script>
 </body>
 </html>
